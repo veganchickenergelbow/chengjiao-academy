@@ -231,7 +231,10 @@ ruby.w rt{display:none;font-family:var(--f-ui);font-size:.46em;font-weight:700;c
 .footer{position:fixed;left:0;right:0;bottom:0;z-index:15;background:var(--panel);border-top:2px solid var(--line);padding-block:14px calc(14px + env(safe-area-inset-bottom,0px))}
 .footer.ok{background:var(--mint-2);border-color:var(--mint-2)}
 .footer.bad{background:var(--red-2);border-color:var(--red-2)}
-.footer-in{max-width:760px;margin:0 auto;padding-inline:16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.footer-in{position:relative;max-width:760px;margin:0 auto;padding-inline:16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.orange-pop{position:absolute;right:16px;top:-4px;display:flex;align-items:center;gap:4px;font-family:var(--f-disp);font-weight:800;font-size:15px;color:#E4783C;pointer-events:none;animation:orangeFloat 1.1s ease-out forwards}
+.orange-pop svg{width:18px;height:18px}
+@keyframes orangeFloat{0%{opacity:0;transform:translateY(6px) scale(.8)}15%{opacity:1;transform:translateY(0) scale(1.05)}75%{opacity:1}100%{opacity:0;transform:translateY(-22px) scale(1)}}
 .fb{flex:1;min-width:220px;display:grid;gap:4px}
 .fb h3{font-size:21px}
 .footer.ok .fb h3{color:var(--mint-t)}
@@ -559,9 +562,9 @@ const money = n => 'S$'+Math.round(n/1000)+'k';
 const KEY='cjxt-progress-v1';
 const RANKS=[{zh:'销售代表',en:'Sales rep'},{zh:'客户经理',en:'Account manager'},{zh:'大客户经理',en:'Key account manager'},{zh:'销售总监',en:'Sales director'}];
 const QUOTA=1000; const PROMO={U1:1,U3:2,U5:3};
-function freshP(){ return { xp:0, done:{}, leads:{}, rank:0, deals:{}, seen:{}, updated:0 }; }
+function freshP(){ return { xp:0, done:{}, leads:{}, rank:0, deals:{}, seen:{}, updated:0, oranges:0, garden:{seenStage:0} }; }
 let P=freshP();
-try{ const s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s&&typeof s==='object') P=Object.assign(freshP(),s); }catch(e){}
+try{ const s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s&&typeof s==='object'){ const hadOranges=typeof s.oranges==='number'; P=Object.assign(freshP(),s); if(!hadOranges) P.oranges=Math.floor((P.xp||0)/3); P.garden=Object.assign({seenStage:0},P.garden||{}); } }catch(e){}
 function save(){ P.updated=Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(P)); }catch(e){} if(typeof queueWrite==='function') queueWrite(); }
 if(P.dealWon&&!Object.keys(P.deals||{}).length){ P.deals={U1:P.bestDeal||150000}; } delete P.dealWon; delete P.bestDeal; P.deals=P.deals||{};
 const UNITS=D.units;
@@ -602,6 +605,103 @@ function unlocked(L){ if(!unitOpen(L.u)) return false; return L.i===0 || !!P.don
 function duelUnlocked(u){ return unitOpen(u) && UNITS[u].lessons.every(l=>P.done[l.id]); }
 const leadCount = () => Object.keys(P.leads).length;
 
+/* ---------- garden (persistent, never resets) ---------- */
+const GSTAGES=[
+  {t:0,zh:'空地',en:'Empty plot'},
+  {t:10,zh:'发芽',en:'Sprout'},
+  {t:30,zh:'小树',en:'Sapling'},
+  {t:60,zh:'桔子树',en:'First fruit'},
+  {t:120,zh:'果园',en:'Little orchard'},
+  {t:200,zh:'石灯笼',en:'Stone lantern'},
+  {t:300,zh:'锦鲤池',en:'Koi pond'},
+  {t:450,zh:'竹林',en:'Bamboo grove'},
+  {t:650,zh:'月门',en:'Moon gate'},
+  {t:900,zh:'亭子',en:'Pavilion'},
+  {t:1200,zh:'大吉大利',en:'Full festive garden'}
+];
+function gardenStageIdx(n){ let s=0; for(let i=0;i<GSTAGES.length;i++) if(n>=GSTAGES[i].t) s=i; return s; }
+function earnOranges(n){ if(!n) return; P.oranges+=n; if(X&&typeof X.oranges==='number') X.oranges+=n; }
+function plainOrange(x,y,r){
+  return `<g transform="translate(${x.toFixed(1)},${y.toFixed(1)})"><circle r="${r}" fill="#FF9A3C"/><circle r="${r}" fill="#FFB35C" opacity=".55" cx="${-r*.28}" cy="${-r*.28}"/><path d="M0 ${(-r).toFixed(1)} q3 -3 5 -.5" stroke="#3FA34D" stroke-width="1.3" fill="none" stroke-linecap="round"/></g>`;
+}
+function cuteOrange(x,y,r){
+  const lw=Math.max(1.2,r*0.09);
+  return `<g transform="translate(${x.toFixed(1)},${y.toFixed(1)})">
+    <ellipse cx="1.5" cy="${(r*.9).toFixed(1)}" rx="${(r*.95).toFixed(1)}" ry="${(r*.32).toFixed(1)}" fill="#000" opacity=".08"/>
+    <circle r="${r}" fill="#FF9A3C"/>
+    <circle r="${(r*.8).toFixed(1)}" cx="${(-r*.28).toFixed(1)}" cy="${(-r*.28).toFixed(1)}" fill="#FFB35C" opacity=".55"/>
+    <path d="M0 ${(-r).toFixed(1)} q3 -4 6 -1" stroke="#3FA34D" stroke-width="${lw}" fill="none" stroke-linecap="round"/>
+    <ellipse cx="4" cy="${(-r-1).toFixed(1)}" rx="3" ry="1.5" fill="#4CAF50" transform="rotate(28)"/>
+    <circle cx="${(-r*.32).toFixed(1)}" cy="${(-r*.06).toFixed(1)}" r="${(r*.11).toFixed(1)}" fill="#3A2410"/>
+    <circle cx="${(r*.32).toFixed(1)}" cy="${(-r*.06).toFixed(1)}" r="${(r*.11).toFixed(1)}" fill="#3A2410"/>
+    <path d="M${(-r*.26).toFixed(1)} ${(r*.2).toFixed(1)} Q0 ${(r*.42).toFixed(1)} ${(r*.26).toFixed(1)} ${(r*.2).toFixed(1)}" stroke="#3A2410" stroke-width="${lw}" fill="none" stroke-linecap="round"/>
+    <circle cx="${(-r*.42).toFixed(1)}" cy="${(r*.14).toFixed(1)}" r="${(r*.13).toFixed(1)}" fill="#FF7A7A" opacity=".55"/>
+    <circle cx="${(r*.42).toFixed(1)}" cy="${(r*.14).toFixed(1)}" r="${(r*.13).toFixed(1)}" fill="#FF7A7A" opacity=".55"/>
+  </g>`;
+}
+function treeSVG(x,y,size,fruitN){
+  let s=`<rect x="${x-4}" y="${y-size*.34}" width="8" height="${(size*.36).toFixed(1)}" rx="3" fill="#8B5A3C"/>
+    <circle cx="${x}" cy="${(y-size*.58).toFixed(1)}" r="${(size*.42).toFixed(1)}" fill="#379446"/>
+    <circle cx="${(x-size*.22).toFixed(1)}" cy="${(y-size*.42).toFixed(1)}" r="${(size*.3).toFixed(1)}" fill="#48B65A"/>
+    <circle cx="${(x+size*.22).toFixed(1)}" cy="${(y-size*.42).toFixed(1)}" r="${(size*.3).toFixed(1)}" fill="#3FA34D"/>`;
+  const cap=Math.max(0,Math.min(24,fruitN));
+  for(let i=0;i<cap;i++){ const ang=(i*137.5)*Math.PI/180, rad=size*.34*Math.sqrt((i+1)/Math.max(1,cap));
+    const fx=x+Math.cos(ang)*rad, fy=(y-size*.58)+Math.sin(ang)*rad*.75;
+    s+=plainOrange(fx,fy,3); }
+  return s;
+}
+function basketSVG(x,y,n){
+  let s=`<path d="M${x-24} ${y} L${x-19} ${y+22} Q${x} ${y+30} ${x+19} ${y+22} L${x+24} ${y} Z" fill="#C68A4E"/>
+    <path d="M${x-24} ${y} Q${x} ${y+10} ${x+24} ${y}" fill="none" stroke="#9C6A38" stroke-width="2.5"/>`;
+  const cap=Math.max(0,Math.min(8,n));
+  for(let i=0;i<cap;i++){ const row=i<5?0:1, idx=row?i-5:i, cnt=row?3:5;
+    const fx=x-16+ (idx+.5)*(32/cnt), fy=y-4-row*10;
+    s+=cuteOrange(fx,fy,7); }
+  return s;
+}
+function gardenSVG(n){
+  const stage=gardenStageIdx(n), cur=GSTAGES[stage], nxt=GSTAGES[stage+1];
+  const range=nxt?nxt.t-cur.t:100, prog=nxt?n-cur.t:range, basketN=Math.max(0,Math.min(8,Math.round(prog/range*8)));
+  let s=`<svg viewBox="0 0 320 160" width="100%" style="display:block" role="img" aria-label="${esc(cur.zh)} ${esc(cur.en)}" xmlns="http://www.w3.org/2000/svg">`;
+  s+=`<rect width="320" height="160" fill="var(--panel-2)" rx="14"/><rect y="116" width="320" height="44" fill="var(--mint-2)"/>`;
+  if(stage>=7){ // bamboo, far left edge
+    [0,1,2].forEach((i)=>{ s+=`<rect x="${10+i*8}" y="${64-i*8}" width="5" height="${52+i*8}" rx="2.5" fill="#7CB342"/><rect x="${10+i*8}" y="${80-i*8}" width="5" height="3" fill="#5C8A2E"/>`; });
+  }
+  if(stage>=5){ // stone lantern, clear of bamboo
+    s+=`<rect x="58" y="100" width="6" height="18" fill="#9AA0A6"/><rect x="50" y="90" width="22" height="12" rx="2" fill="#B4B9BF"/><polygon points="48,90 74,90 61,78" fill="#9AA0A6"/><rect x="54" y="118" width="14" height="4" fill="#8A9096"/>`;
+  }
+  if(stage===0){ s+=`<ellipse cx="150" cy="126" rx="22" ry="7" fill="#7C5A44"/><path d="M150 126 q-2 -14 4 -18" stroke="#3FA34D" stroke-width="2" fill="none" stroke-linecap="round"/><ellipse cx="155" cy="106" rx="4" ry="2" fill="#4CAF50"/>`; }
+  else if(stage>=1 && stage<3){ const h=16+stage*10; s+=`<rect x="146" y="${126-h}" width="6" height="${h}" rx="2" fill="#8B5A3C"/><circle cx="149" cy="${126-h}" r="${8+stage*5}" fill="#48B65A"/>`; }
+  else if(stage>=3){ s+=treeSVG(150,126,64, Math.min(24, n-60)); if(stage>=4) s+=treeSVG(200,130,50, Math.min(20, Math.round((n-120)/2))); }
+  if(stage>=8){ s+=`<g fill="none" stroke="#C3392E" stroke-width="6"><path d="M186 34 v34"/><path d="M214 34 v34"/></g><path d="M183 34 q15 -16 34 0" fill="none" stroke="#C3392E" stroke-width="6"/>`; }
+  if(stage>=9){ s+=`<polygon points="256,46 298,46 277,28" fill="#C3392E"/><rect x="263" y="46" width="4" height="18" fill="#8B5A3C"/><rect x="287" y="46" width="4" height="18" fill="#8B5A3C"/>`; }
+  if(stage>=10){ s+=`<rect x="275" y="10" width="4" height="6" fill="#8C3B2C"/><circle cx="277" cy="20" r="7" fill="#E4483C"/><rect x="292" y="14" width="4" height="6" fill="#8C3B2C"/><circle cx="294" cy="24" r="6" fill="#E4483C"/>`; }
+  if(stage>=6){ s+=`<ellipse cx="70" cy="134" rx="30" ry="10" fill="var(--ice-2)" stroke="var(--ice)" stroke-width="1.5"/><path d="M60 132 q4 -4 8 0 q4 4 8 0" stroke="#F0A53A" stroke-width="2" fill="none"/><path d="M74 134 q4 -4 8 0 q4 4 8 0" stroke="#F0A53A" stroke-width="2" fill="none"/>`; }
+  s+=basketSVG(272,138,basketN);
+  s+='</svg>';
+  return s;
+}
+function orangeTile(n){ return `<div class="stat" style="box-shadow:inset 0 0 0 2px var(--line)"><b style="color:#E4783C">+${n}</b><span>桔子 oranges</span></div>`; }
+function newStageBlock(oranges){
+  const stage=gardenStageIdx(oranges);
+  if(stage<=P.garden.seenStage) return '';
+  const s=GSTAGES[stage]; P.garden.seenStage=stage; save();
+  return `<div class="panel" style="padding:16px;display:grid;gap:10px;justify-items:center;text-align:center;max-width:340px;margin:0 auto"><div class="eyebrow">新景 · New in your garden</div>${gardenSVG(oranges)}<h3 style="margin:0;font-size:17px"><span class="zh">${esc(s.zh)}</span> ${esc(s.en)}</h3></div>`;
+}
+function gardenPanel(){
+  const n=P.oranges, stage=gardenStageIdx(n), cur=GSTAGES[stage], nxt=GSTAGES[stage+1];
+  const pct = nxt ? Math.min(100,Math.round((n-cur.t)/(nxt.t-cur.t)*100)) : 100;
+  const toNext = nxt ? `${n} / ${nxt.t} to ${nxt.zh}` : 'Full garden reached';
+  return `<div class="panel garden" style="padding:16px 18px;display:grid;gap:10px">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap"><h2 style="font-size:18px"><span class="zh">桔园</span> · Mandarin garden</h2><span class="hint">${esc(cur.zh)} · ${esc(cur.en)}</span></div>
+    ${gardenSVG(n)}
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="display:inline-flex;align-items:center;gap:5px;font-weight:800;color:#E4783C"><svg width="16" height="16" viewBox="-8 -8 16 16" aria-hidden="true">${plainOrange(0,0,7)}</svg>${n}</span>
+      <div class="qbar" style="flex:1;min-width:120px"><i style="width:${pct}%;background:linear-gradient(90deg,#FFC23D,#FF9A3C)"></i></div>
+      <span class="hint">${esc(toNext)}</span>
+    </div></div>`;
+}
+
 /* ---------- session ---------- */
 let X=null; // current lesson / review / duel
 let screen='home';
@@ -630,13 +730,13 @@ function startLesson(lid){
   const L=lessonOf(lid);
   const here=new Set(); L.ex.forEach(e=>markSeenInto(e,here));
   const pastWords=seenWords().map(w=>w.zh).filter(z=>!here.has(z));
-  X={ mode:'lesson', lid, title:L, pastWords, popDone:false, queue:L.ex.map((e,i)=>({lid,i})), pos:0, hearts:5, graded:0, correct:0, requeued:{}, newLeads:0, xp:0, phase:'answer', sel:null, res:null, ui:null };
+  X={ mode:'lesson', lid, title:L, pastWords, popDone:false, queue:L.ex.map((e,i)=>({lid,i})), pos:0, hearts:5, graded:0, correct:0, requeued:{}, newLeads:0, xp:0, oranges:0, phase:'answer', sel:null, res:null, ui:null };
   screen='lesson'; initEx(); render();
 }
 function startReview(){
   const ids=shuffle(Object.keys(P.leads).filter(id=>{ if(id.startsWith('w:')) return WORDS.has(id.slice(2)); const [lid,i]=id.split('-'); const L=lessonOf(lid); return L&&L.ex[+i]; })).slice(0,8);
   const queue=ids.map(id=>{ if(id.startsWith('w:')) return {syn:recallEx(id.slice(2),false)}; const [lid,i]=id.split('-'); return {lid,i:+i}; });
-  X={ mode:'review', queue, pos:0, hearts:Infinity, graded:0, correct:0, requeued:{}, revived:0, xp:0, phase:'answer', sel:null, res:null, ui:null };
+  X={ mode:'review', queue, pos:0, hearts:Infinity, graded:0, correct:0, requeued:{}, revived:0, xp:0, oranges:0, phase:'answer', sel:null, res:null, ui:null };
   screen='lesson'; initEx(); render();
 }
 function cur(){ return exOf(X.queue[X.pos]); }
@@ -673,12 +773,13 @@ function check(){
 }
 function grade(ok){
   const ref=X.queue[X.pos], id=idOf(ref); clearTimeout(popTimer);
+  X.orangeAnim=false;
   if(ref.pop){ X.res={ok,pop:true}; X.phase='feedback';
-    if(ok){ X.xp+=5; X.popBonus=(X.hearts<5); if(X.hearts<5) X.hearts++; sfx('super'); }
+    if(ok){ X.xp+=5; X.popBonus=(X.hearts<5); if(X.hearts<5) X.hearts++; earnOranges(2); X.orangeAnim=2; sfx('super'); }
     else { P.leads[id]={n:((P.leads[id]||{}).n||0)+1}; X.newLeads++; sfx('off'); }
     save(); render(); return; }
   X.graded++; X.res={ok}; X.phase='feedback';
-  if(ok){ X.correct++; X.xp+=2; sfx('fit'); if(X.mode==='review'&&P.leads[id]){ delete P.leads[id]; X.revived++; } }
+  if(ok){ X.correct++; X.xp+=2; earnOranges(1); X.orangeAnim=1; sfx('fit'); if(X.mode==='review'&&P.leads[id]){ delete P.leads[id]; X.revived++; } }
   else {
     sfx('off');
     if(X.mode==='lesson'){ X.hearts--; if(!P.leads[id]) X.newLeads++; P.leads[id]={n:((P.leads[id]||{}).n||0)+1}; if(!X.requeued[id]&&cur().t!=='pairs'){ X.requeued[id]=1; X.queue.push(X.queue[X.pos]); } }
@@ -694,7 +795,7 @@ function next(){
   initEx(); render();
 }
 function finish(){
-  if(X.mode==='lesson'){ X.xp+=10; P.done[X.lid]=true; }
+  if(X.mode==='lesson'){ X.xp+=10; P.done[X.lid]=true; earnOranges(5); }
   P.xp+=X.xp; save(); X.end='done'; screen='end'; sfx('win'); render();
 }
 
@@ -783,6 +884,7 @@ function rHome(){
   $('#screen').innerHTML=`<section class="home">
     <div class="panel career"><div class="career-top"><div class="rank">${r.zh}<small>${esc(r.en)}${nr?' · next: '+nr.zh:' · top rank'}</small></div>
       <div class="quota"><div class="row"><span><span class="zh">年度指标</span> Annual target</span><b>${P.xp} / ${QUOTA} XP</b></div><div class="qbar"><i style="width:${q}%"></i></div></div></div></div>
+    ${gardenPanel()}
     <div class="panel leads"><div class="ico">${ICON.snow}</div><div class="txt"><b>冷线索 · ${lc}</b><div>${lc?'Every mistake becomes a lead going cold. Get it right again to warm it back up.':'No cold leads. Mistakes you make in lessons will show up here for review.'}</div></div>
       <button class="btn" data-act="review" ${lc?'':'disabled'}>Revive ${Math.min(8,lc)||''}</button></div>
     <div class="panel leads"><div class="ico" style="background:var(--sun-2);color:var(--sun-t)">${ICON.book}</div><div class="txt"><b>词库 · ${seenWords().length}</b><div>Every word you've met, with pinyin, meaning and the sentences it appears in.</div></div>
@@ -837,7 +939,7 @@ function rLesson(){
   let f='';
   if(e.t==='intro') f=`<div class="footer"><div class="footer-in"><div class="fb"><span class="hint">Hover or tap any word for its meaning.</span></div><button class="btn" data-act="got">知道了 Got it</button></div></div>`;
   else if(!F) f=`<div class="footer"><div class="footer-in"><div class="fb">${e.t==='pairs'?'<span class="hint">Tap a Chinese word, then its meaning.</span>':''}</div>${e.t==='pairs'?'':`<button class="btn" data-act="check" ${canCheck()?'':'disabled'}>检查 Check</button>`}</div></div>`;
-  else f=`<div class="footer ${res.ok?'ok':'bad'}"><div class="footer-in"><div class="fb fb-scroll">${feedback(e,res)}</div><button class="btn ${res.ok?'ok':'bad'}" data-act="next">继续 Continue</button></div></div>`;
+  else f=`<div class="footer ${res.ok?'ok':'bad'}"><div class="footer-in">${res.ok&&X.orangeAnim?`<span class="orange-pop"><svg viewBox="-8 -8 16 16" aria-hidden="true">${plainOrange(0,0,7)}</svg>+${X.orangeAnim}</span>`:''}<div class="fb fb-scroll">${feedback(e,res)}</div><button class="btn ${res.ok?'ok':'bad'}" data-act="next">继续 Continue</button></div></div>`;
   $('#footer').innerHTML=f;
   const tin=$('#tin'); if(tin&&!F){ tin.addEventListener('input',onType); tin.addEventListener('keydown',ev=>{ if(ev.key==='Enter'&&canCheck()){ ev.preventDefault(); check(); } }); tin.focus({preventScroll:true}); paintType(); }
 }
@@ -906,15 +1008,18 @@ function rEnd(){
   let html='';
   if(X.mode==='lesson'&&X.end==='fail'){
     html=`<div class="big">已读不回</div><h2>You ran out of trust</h2><p class="muted" style="margin:0;max-width:44ch">The client stopped replying. Everything you missed is now in your cold leads. Try the lesson again.</p>
+      ${X.oranges?`<p class="hint" style="margin:0">You still keep the ${X.oranges} 桔子 you picked.</p>`:''}
       <div class="actions"><button class="btn" data-act="lesson" data-id="${X.lid}">再试一次 Try again</button><button class="btn ghost" data-act="home">Home</button></div>`;
   } else if(X.mode==='lesson'){
     const acc=X.graded?Math.round(X.correct/X.graded*100):100;
     html=`<div class="big">课程完成</div><h2>${esc(X.title.en)} · <span class="zh">${X.title.zh}</span></h2>
-      <div class="tiles"><div class="stat s1"><b>+${X.xp}</b><span>XP to quota</span></div><div class="stat s2"><b>${acc}%</b><span>Accuracy</span></div><div class="stat s3"><b>${X.newLeads}</b><span>New cold leads</span></div></div>
+      <div class="tiles"><div class="stat s1"><b>+${X.xp}</b><span>XP to quota</span></div><div class="stat s2"><b>${acc}%</b><span>Accuracy</span></div><div class="stat s3"><b>${X.newLeads}</b><span>New cold leads</span></div>${orangeTile(X.oranges)}</div>
+      ${newStageBlock(P.oranges)}
       <div class="actions"><button class="btn" data-act="home">继续 Continue</button></div>`;
   } else {
     html=`<div class="big">线索回暖</div><h2>Revived ${X.revived} of ${X.queue.length} leads</h2>
-      <div class="tiles"><div class="stat s1"><b>+${X.xp}</b><span>XP to quota</span></div><div class="stat s3"><b>${leadCount()}</b><span>Cold leads left</span></div></div>
+      <div class="tiles"><div class="stat s1"><b>+${X.xp}</b><span>XP to quota</span></div><div class="stat s3"><b>${leadCount()}</b><span>Cold leads left</span></div>${orangeTile(X.oranges)}</div>
+      ${newStageBlock(P.oranges)}
       <div class="actions"><button class="btn" data-act="home">继续 Continue</button>${leadCount()?'<button class="btn ghost" data-act="review">Another round</button>':''}</div>`;
   }
   $('#screen').innerHTML=`<section class="panel end">${html}</section>`;
@@ -924,7 +1029,7 @@ function rEnd(){
 const DV={ best:{zh:'最佳',en:'Best answer',d:15}, partial:{zh:'还行',en:'Partly there',d:7}, miss:{zh:'没抓住重点',en:'Missed the concern',d:-5}, costly:{zh:'代价太高',en:'Too costly',d:10} };
 const kOf = o => o.kBy ? o.kBy[X.prio] : o.k;
 function startDuel(u){ const du=UNITS[u].duel; const pk=du.priorities?Object.keys(du.priorities):null;
-  X={ mode:'duel', u, turn:0, chance:du.start, deal:du.deal||150000, phase:'intro', sel:null, order:null, last:null, log:[], costlyAt:-1, mood:'neutral', prio: pk?pk[Math.floor(Math.random()*pk.length)]:null }; screen='duel'; render(); }
+  X={ mode:'duel', u, turn:0, chance:du.start, deal:du.deal||150000, phase:'intro', sel:null, order:null, last:null, log:[], costlyAt:-1, mood:'neutral', oranges:0, prio: pk?pk[Math.floor(Math.random()*pk.length)]:null }; screen='duel'; render(); }
 function dLine(t){ const T=UNITS[X.u].duel.turns[t]; if(T.lineBy) return T.lineBy[X.prio]; return (T.alt&&X.costlyAt>=0&&X.costlyAt<t)?T.alt:T.line; }
 function rDuel(){
   const du=UNITS[X.u].duel, T=du.turns[X.turn]||du.turns[du.turns.length-1], ch=D.chars[du.char];
@@ -961,6 +1066,8 @@ function rDuel(){
       <h2>${win?`${esc(du.title.en)}: passed at ${money(X.deal)}`:`Close chance ${X.chance}%, needed ${du.goal}%`}</h2>
       ${du.priorities?`<p style="margin:0">Her real priority this time: <b class="zh">${du.priorities[X.prio].zh}</b> ${esc(du.priorities[X.prio].en)}</p>`:''}
       ${promo?`<p style="margin:0;font-weight:800">Promoted: <span class="zh">${RANKS[promo].zh}</span> ${RANKS[promo].en}</p>`:''}
+      ${X.oranges?`<div class="tiles" style="max-width:220px;margin:0 auto">${orangeTile(X.oranges)}</div>`:''}
+      ${newStageBlock(P.oranges)}
       ${win&&last?`<p style="margin:0;max-width:52ch">That's the whole course: from first call to a stamped contract. Keep your cold leads warm, and replay any lesson or negotiation to stay sharp.</p>`:''}
       ${miss?`<div class="replay"><h3 style="font-size:18px">复盘 · Replay</h3>${miss}</div>`:'<p class="muted" style="margin:0">Every answer was the best one.</p>'}
       <div class="actions">${win?'':`<button class="btn" data-act="duel" data-u="${X.u}">再谈一次 Try again</button>`}<button class="btn ${win?'':'ghost'}" data-act="home">${win?'继续 Continue':'Home'}</button></div></section>`;
@@ -976,12 +1083,13 @@ function dSay(){
   const T=UNITS[X.u].duel.turns[X.turn], o=T.options[X.sel], k=kOf(o), v=DV[k];
   X.chance=Math.max(0,Math.min(100,X.chance+v.d)); if(k==='costly'){ X.deal=Math.round(X.deal*.9); if(X.costlyAt<0) X.costlyAt=X.turn; }
   X.mood={best:'happy',partial:'neutral',miss:'confused',costly:'happy'}[k];
+  if(k==='best') earnOranges(3); else if(k==='partial') earnOranges(1);
   X.log.push({t:X.turn, idx:X.sel, k, line:dLine(X.turn)}); X.last={idx:X.sel}; X.phase='said'; sfx('click'); render();
 }
 function dNext(){ X.seenOpts=0; save();
   const du=UNITS[X.u].duel;
   if(X.turn>=du.turns.length-1){ X.phase='end'; const win=X.chance>=du.goal;
-    if(win){ const id=UNITS[X.u].id, first=!P.deals[id]; P.deals[id]=Math.max(P.deals[id]||0,X.deal); const r=PROMO[id]; if(r&&P.rank<r){ P.rank=r; X.promo=r; } if(first) P.xp+=50; save(); }
+    if(win){ const id=UNITS[X.u].id, first=!P.deals[id]; P.deals[id]=Math.max(P.deals[id]||0,X.deal); const r=PROMO[id]; if(r&&P.rank<r){ P.rank=r; X.promo=r; } if(first){ P.xp+=50; earnOranges(10); } save(); }
     render(); window.scrollTo(0,0); return; }
   X.turn++; X.phase='line'; X.sel=null; render();
 }
