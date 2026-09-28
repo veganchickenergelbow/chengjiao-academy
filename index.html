@@ -571,7 +571,7 @@ const money = n => 'S$'+Math.round(n/1000)+'k';
 const KEY='cjxt-progress-v1';
 const RANKS=[{zh:'销售代表',en:'Sales rep'},{zh:'客户经理',en:'Account manager'},{zh:'大客户经理',en:'Key account manager'},{zh:'销售总监',en:'Sales director'}];
 const QUOTA=1000; const PROMO={U1:1,U3:2,U5:3};
-function freshP(){ return { xp:0, done:{}, leads:{}, rank:0, deals:{}, seen:{}, updated:0, oranges:0, garden:{seenStage:0} }; }
+function freshP(){ return { xp:0, done:{}, leads:{}, rank:0, deals:{}, seen:{}, updated:0, oranges:0, garden:{seenStage:0}, backup:null }; }
 let P=freshP();
 try{ const s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s&&typeof s==='object'){ const hadOranges=typeof s.oranges==='number'; P=Object.assign(freshP(),s); if(!hadOranges) P.oranges=Math.floor((P.xp||0)/3); P.garden=Object.assign({seenStage:0},P.garden||{}); } }catch(e){}
 function save(){ P.updated=Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(P)); }catch(e){} if(typeof queueWrite==='function') queueWrite(); }
@@ -874,6 +874,9 @@ function renderHUD(){
 const LOCAL = location.protocol==='file:';
 const FSA = LOCAL && 'showSaveFilePicker' in window && 'indexedDB' in window;
 let fileHandle=null, fileState='none', fileName='';
+let storagePersisted=false;
+try{ if(navigator.storage&&navigator.storage.persist) navigator.storage.persist().catch(()=>{}); if(navigator.storage&&navigator.storage.persisted) navigator.storage.persisted().then(v=>{ storagePersisted=!!v; if(screen==='home') render(); }).catch(()=>{}); }catch(e){}
+let backupNudgeDismissed=false;
 function idb(){ return new Promise((res,rej)=>{ const r=indexedDB.open('cjxt',1); r.onupgradeneeded=()=>r.result.createObjectStore('kv'); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
 async function idbGet(k){ try{ const db=await idb(); return await new Promise(res=>{ const t=db.transaction('kv').objectStore('kv').get(k); t.onsuccess=()=>res(t.result); t.onerror=()=>res(null); }); }catch(e){ return null; } }
 async function idbSet(k,v){ try{ const db=await idb(); await new Promise(res=>{ const t=db.transaction('kv','readwrite').objectStore('kv').put(v,k); t.onsuccess=()=>res(); t.onerror=()=>res(); }); }catch(e){} }
@@ -891,19 +894,90 @@ let wTimer=null;
 function queueWrite(){ if(!fileHandle||fileState!=='linked') return; clearTimeout(wTimer); wTimer=setTimeout(writeFile,500); }
 async function writeFile(){ if(!fileHandle) return; try{ const w=await fileHandle.createWritable(); await w.write(JSON.stringify(P,null,1)); await w.close(); }catch(e){ fileState='reconnect'; if(screen==='home') render(); } }
 function exportFile(){ try{ const b=new Blob([JSON.stringify(P,null,1)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='chengjiao-progress-'+new Date().toLocaleDateString('en-CA')+'.json'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },500); }catch(e){} }
-function importFile(file){ const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!looksLikeP(d)) throw 0; P=Object.assign(freshP(),d); P.deals=P.deals||{}; save(); render(); }catch(e){ const s=$('#lpstatus'); if(s) s.textContent='That file is not a 成交学堂 progress file.'; } }; r.readAsText(file); }
+async function shareBackup(){
+  const name='chengjiao-progress-'+new Date().toLocaleDateString('en-CA')+'.json';
+  const f=new File([JSON.stringify(P,null,1)],name,{type:'application/json'});
+  try{
+    if(navigator.canShare && navigator.canShare({files:[f]})){ await navigator.share({files:[f],title:'成交学堂 progress'}); }
+    else { exportFile(); }
+    P.backup={at:Date.now(),oranges:P.oranges}; save(); if(screen==='home') render();
+  }catch(e){ if(e&&e.name==='AbortError') return; /* other failure: leave backup timestamp unset */ }
+}
+let pendingImport=null;
+function importFile(file){ const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!looksLikeP(d)) throw 0; pendingImport=d; if(screen==='home') render(); }catch(e){ const s=$('#lpstatus'); if(s) s.textContent='That file is not a 成交学堂 progress file.'; } }; r.readAsText(file); }
+function mergeP(cur,inc){
+  const out=Object.assign(freshP(),cur);
+  out.xp=Math.max(cur.xp||0, inc.xp||0);
+  out.oranges=Math.max(cur.oranges||0, inc.oranges||0);
+  out.rank=Math.max(cur.rank||0, inc.rank||0);
+  out.garden={ seenStage: Math.max((cur.garden&&cur.garden.seenStage)||0, (inc.garden&&inc.garden.seenStage)||0) };
+  out.done=Object.assign({}, cur.done||{}, inc.done||{});
+  out.leads=Object.assign({}, cur.leads||{}, inc.leads||{});
+  out.deals={}; const dk=new Set([...Object.keys(cur.deals||{}),...Object.keys(inc.deals||{})]);
+  dk.forEach(k=>{ out.deals[k]=Math.max((cur.deals||{})[k]||0,(inc.deals||{})[k]||0); });
+  out.seen={}; const sk=new Set([...Object.keys(cur.seen||{}),...Object.keys(inc.seen||{})]);
+  sk.forEach(k=>{ out.seen[k]=Math.max((cur.seen||{})[k]||0,(inc.seen||{})[k]||0); });
+  out.backup=cur.backup||inc.backup||null;
+  out.updated=Math.max(cur.updated||0, inc.updated||0);
+  return out;
+}
+let restoreMsg='';
+function restoreReplace(){ if(!pendingImport) return; P=Object.assign(freshP(),pendingImport); P.deals=P.deals||{}; pendingImport=null; restoreMsg='Replaced with the backup file.'; save(); render(); }
+function restoreMerge(){ if(!pendingImport) return; P=mergeP(P,pendingImport); pendingImport=null; restoreMsg='Merged — kept the best of both.'; save(); render(); }
+function restoreCancel(){ pendingImport=null; render(); }
+function fmtBackupDate(t){ return new Date(t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}); }
+function importComparePanel(){
+  if(!pendingImport) return '';
+  const inc=pendingImport, curDoneN=Object.keys(P.done||{}).length, incDoneN=Object.keys(inc.done||{}).length;
+  const row=(lbl,a,b)=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)"><span class="hint" style="font-weight:700">${esc(lbl)}</span><span style="display:flex;gap:18px"><b>${esc(a)}</b><b>${esc(b)}</b></span></div>`;
+  return `<div class="panel leads" style="flex-direction:column;align-items:stretch;gap:10px">
+    <div class="txt"><b>还原进度 · Restore from backup</b><div>Compare the backup file with what's on this device, then choose how to combine them.</div></div>
+    <div>
+      <div style="display:flex;justify-content:flex-end;gap:18px;padding-bottom:4px"><span class="hint">This device</span><span class="hint">Backup file</span></div>
+      ${row('Updated', P.updated?fmtBackupDate(P.updated):'—', inc.updated?fmtBackupDate(inc.updated):'—')}
+      ${row('XP', P.xp||0, inc.xp||0)}
+      ${row('桔子 Oranges', P.oranges||0, inc.oranges||0)}
+      ${row('Lessons done', curDoneN, incDoneN)}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+      <button class="btn" data-act="restore-merge" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--coral);box-shadow:0 4px 0 var(--coral-d)">Merge · keep the best of both</button>
+      <button class="btn ghost" data-act="restore-replace" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 2px var(--line),0 3px 0 var(--line)">Replace with backup</button>
+    </div>
+    <button class="link" data-act="restore-cancel" style="align-self:flex-start">Cancel</button>
+    </div>`;
+}
 async function bootLocal(){ if(!FSA) return; const h=await idbGet('handle'); if(!h) return; fileHandle=h; fileName=h.name;
   try{ if(await h.queryPermission({mode:'readwrite'})==='granted'){ await adoptHandle(h,false); return; } }catch(e){}
   fileState='reconnect'; if(screen==='home') render(); }
-function localPanel(){
+function backupStale(){
+  if(!P.backup) return P.oranges>=50;
+  if(P.oranges-(P.backup.oranges||0)>=150) return true;
+  if(Date.now()-(P.backup.at||0) > 21*24*3600*1000) return true;
+  return false;
+}
+function backupPanel(){
+  if(pendingImport) return importComparePanel();
   let status, btns='';
-  if(!FSA) status='Progress is saved in this browser on this laptop. Use Export now and then to keep a backup file.';
+  if(!FSA) status='Progress is saved in this browser on this device. Clearing Safari’s website data (or uninstalling the app) erases it, so back up now and then.';
   else if(fileState==='linked') status=`Saving automatically to <b>${esc(fileName)}</b>.`;
   else if(fileState==='reconnect'){ status=`Linked to <b>${esc(fileName)}</b>. Your browser needs you to allow access again for this session.`; btns=`<button class="btn" data-act="lp-reconnect" style="font-size:15px;padding:9px 18px;border-radius:12px">Reconnect</button>`; }
   else { status='Progress is saved in this browser. Link a file to also keep it in a folder you choose, such as the app folder in Documents.'; btns=`<button class="btn" data-act="lp-create" style="font-size:15px;padding:9px 18px;border-radius:12px">Create file</button><button class="btn ghost" data-act="lp-open" style="font-size:15px;padding:9px 18px;border-radius:12px">Open existing</button>`; }
-  return `<div class="panel leads"><div class="ico" style="background:var(--mint-2);color:var(--mint-t)">${ICON.disk}</div><div class="txt"><b>进度文件 · Progress file</b><div id="lpstatus">${status}</div>
-    <div style="margin-top:4px"><button class="link" data-act="lp-export">Export backup</button><button class="link" data-act="lp-import">Import</button><input type="file" id="lpimp" accept=".json,application/json" hidden></div></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">${btns}</div></div>`;
+  const lastLine = P.backup ? `Last backup: ${fmtBackupDate(P.backup.at)} · ${P.backup.oranges} 桔子` : 'Never backed up';
+  const persistLine = storagePersisted ? '<div class="hint" style="margin-top:2px">iOS has marked this app’s data as persistent.</div>' : '';
+  const nudge = (!backupNudgeDismissed && backupStale()) ? `<div class="hint" style="display:flex;justify-content:space-between;gap:8px;align-items:center;background:var(--sun-2);color:var(--sun-t);border-radius:10px;padding:6px 10px;margin-bottom:6px">
+      <span>You’ve earned ${P.oranges-((P.backup&&P.backup.oranges)||0)} 桔子 since your last backup.</span>
+      <button class="link" data-act="backup-nudge-dismiss" aria-label="Dismiss" style="color:inherit">✕</button></div>` : '';
+  const shareBtn = `<button class="btn" data-act="do-backup" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--coral);box-shadow:0 4px 0 var(--coral-d)${nudge?',0 0 0 3px var(--sun)':''}">备份 · Back up</button>`;
+  const restoreBtn = `<button class="btn ghost" data-act="lp-import" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 2px var(--line),0 3px 0 var(--line)">恢复 · Restore</button>`;
+  const msg = restoreMsg ? `<div class="hint" style="color:var(--mint-t);margin-top:2px">${esc(restoreMsg)}</div>` : '';
+  restoreMsg='';
+  return `<div class="panel leads" style="flex-direction:column;align-items:stretch;gap:8px">
+    ${nudge}
+    <div style="display:flex;gap:12px;align-items:flex-start"><div class="ico" style="background:var(--mint-2);color:var(--mint-t)">${ICON.disk}</div><div class="txt"><b>备份 · Backup</b><div id="lpstatus">${status}</div>
+      <div class="hint" style="margin-top:2px">${lastLine}</div>${persistLine}${msg}
+      ${FSA?`<div style="margin-top:4px"><button class="link" data-act="lp-export">Export backup</button><button class="link" data-act="lp-import">Import</button></div>`:''}
+      <input type="file" id="lpimp" accept=".json,application/json" hidden></div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${shareBtn}${restoreBtn}${btns}</div></div>`;
 }
 
 let expanded=new Set();
@@ -937,7 +1011,7 @@ function rHome(){
     <div class="panel leads"><div class="ico" style="background:var(--sun-2);color:var(--sun-t)">${ICON.book}</div><div class="txt"><b>词库 · ${seenWords().length}</b><div>Every word you've met, with pinyin, meaning and the sentences it appears in.</div></div>
       <button class="btn" data-act="bank" style="background:var(--sun);box-shadow:0 3px 0 #C9941C;color:#3A2A00">Open</button></div>
     <div class="units">${units}</div>
-    ${LOCAL?localPanel():''}
+    ${backupPanel()}
     <div class="foot" id="resetrow"><button class="link" data-act="reset">Reset progress</button></div>
   </section>`;
 }
@@ -1163,6 +1237,11 @@ document.addEventListener('click', ev=>{
     case 'lp-reconnect': reconnect(); break;
     case 'lp-export': exportFile(); break;
     case 'lp-import': { const inp=$('#lpimp'); if(inp){ inp.onchange=()=>{ if(inp.files[0]) importFile(inp.files[0]); }; inp.click(); } break; }
+    case 'do-backup': shareBackup(); break;
+    case 'restore-replace': restoreReplace(); break;
+    case 'restore-merge': restoreMerge(); break;
+    case 'restore-cancel': restoreCancel(); break;
+    case 'backup-nudge-dismiss': backupNudgeDismissed=true; rHome(); break;
     case 'bank': X={q:''}; screen='bank'; render(); window.scrollTo(0,0); break;
     case 'garden': screen='garden'; render(); window.scrollTo(0,0); break;
     case 'gbounce': { const el=$('#gscene'); if(el&&!RM){ el.classList.remove('bounce'); void el.offsetWidth; el.classList.add('bounce'); } break; }
