@@ -574,7 +574,7 @@ const QUOTA=1000; const PROMO={U1:1,U3:2,U5:3};
 function freshP(){ return { xp:0, done:{}, leads:{}, rank:0, deals:{}, seen:{}, updated:0, oranges:0, garden:{seenStage:0}, backup:null }; }
 let P=freshP();
 try{ const s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s&&typeof s==='object'){ const hadOranges=typeof s.oranges==='number'; P=Object.assign(freshP(),s); if(!hadOranges) P.oranges=Math.floor((P.xp||0)/3); P.garden=Object.assign({seenStage:0},P.garden||{}); } }catch(e){}
-function save(){ P.updated=Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(P)); }catch(e){} if(typeof queueWrite==='function') queueWrite(); }
+function save(){ P.updated=Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(P)); }catch(e){} if(typeof queueWrite==='function') queueWrite(); if(typeof queueSyncPush==='function') queueSyncPush(); }
 if(P.dealWon&&!Object.keys(P.deals||{}).length){ P.deals={U1:P.bestDeal||150000}; } delete P.dealWon; delete P.bestDeal; P.deals=P.deals||{};
 const UNITS=D.units;
 const LESSONS=[]; UNITS.forEach((U,u)=>U.lessons.forEach((L,i)=>{ L.u=u; L.i=i; LESSONS.push(L); }));
@@ -903,8 +903,8 @@ async function shareBackup(){
     P.backup={at:Date.now(),oranges:P.oranges}; save(); if(screen==='home') render();
   }catch(e){ if(e&&e.name==='AbortError') return; /* other failure: leave backup timestamp unset */ }
 }
-let pendingImport=null;
-function importFile(file){ const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!looksLikeP(d)) throw 0; pendingImport=d; if(screen==='home') render(); }catch(e){ const s=$('#lpstatus'); if(s) s.textContent='That file is not a 成交学堂 progress file.'; } }; r.readAsText(file); }
+let pendingImport=null, pendingImportSource='file';
+function importFile(file){ const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!looksLikeP(d)) throw 0; pendingImport=d; pendingImportSource='file'; if(screen==='home') render(); }catch(e){ const s=$('#lpstatus'); if(s) s.textContent='That file is not a 成交学堂 progress file.'; } }; r.readAsText(file); }
 function mergeP(cur,inc){
   const out=Object.assign(freshP(),cur);
   out.xp=Math.max(cur.xp||0, inc.xp||0);
@@ -922,18 +922,22 @@ function mergeP(cur,inc){
   return out;
 }
 let restoreMsg='';
-function restoreReplace(){ if(!pendingImport) return; P=Object.assign(freshP(),pendingImport); P.deals=P.deals||{}; pendingImport=null; restoreMsg='Replaced with the backup file.'; save(); render(); }
-function restoreMerge(){ if(!pendingImport) return; P=mergeP(P,pendingImport); pendingImport=null; restoreMsg='Merged — kept the best of both.'; save(); render(); }
-function restoreCancel(){ pendingImport=null; render(); }
+function restoreReplace(){ if(!pendingImport) return; P=Object.assign(freshP(),pendingImport); P.deals=P.deals||{}; const src=pendingImportSource; pendingImport=null; pendingImportSource='file'; restoreMsg= src==='sync' ? 'Replaced with the cloud copy.' : 'Replaced with the backup file.'; save(); render(); }
+function restoreMerge(){ if(!pendingImport) return; P=mergeP(P,pendingImport); pendingImport=null; pendingImportSource='file'; restoreMsg='Merged — kept the best of both.'; save(); render(); }
+function restoreCancel(){ const src=pendingImportSource; pendingImport=null; pendingImportSource='file'; render(); if(src==='sync' && typeof syncPush==='function') syncPush(); }
 function fmtBackupDate(t){ return new Date(t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}); }
 function importComparePanel(){
   if(!pendingImport) return '';
   const inc=pendingImport, curDoneN=Object.keys(P.done||{}).length, incDoneN=Object.keys(inc.done||{}).length;
+  const isSync = pendingImportSource==='sync';
   const row=(lbl,a,b)=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)"><span class="hint" style="font-weight:700">${esc(lbl)}</span><span style="display:flex;gap:18px"><b>${esc(a)}</b><b>${esc(b)}</b></span></div>`;
+  const title = isSync ? '云同步 · Cloud has newer progress' : '还原进度 · Restore from backup';
+  const desc = isSync ? "Your cloud copy is newer than what's on this device. Choose how to combine them." : "Compare the backup file with what's on this device, then choose how to combine them.";
+  const rightLbl = isSync ? 'Cloud' : 'Backup file';
   return `<div class="panel leads" style="flex-direction:column;align-items:stretch;gap:10px">
-    <div class="txt"><b>还原进度 · Restore from backup</b><div>Compare the backup file with what's on this device, then choose how to combine them.</div></div>
+    <div class="txt"><b>${title}</b><div>${esc(desc)}</div></div>
     <div>
-      <div style="display:flex;justify-content:flex-end;gap:18px;padding-bottom:4px"><span class="hint">This device</span><span class="hint">Backup file</span></div>
+      <div style="display:flex;justify-content:flex-end;gap:18px;padding-bottom:4px"><span class="hint">This device</span><span class="hint">${rightLbl}</span></div>
       ${row('Updated', P.updated?fmtBackupDate(P.updated):'—', inc.updated?fmtBackupDate(inc.updated):'—')}
       ${row('XP', P.xp||0, inc.xp||0)}
       ${row('桔子 Oranges', P.oranges||0, inc.oranges||0)}
@@ -941,15 +945,126 @@ function importComparePanel(){
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
       <button class="btn" data-act="restore-merge" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--coral);box-shadow:0 4px 0 var(--coral-d)">Merge · keep the best of both</button>
-      <button class="btn ghost" data-act="restore-replace" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 2px var(--line),0 3px 0 var(--line)">Replace with backup</button>
+      <button class="btn ghost" data-act="restore-replace" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 2px var(--line),0 3px 0 var(--line)">${isSync?'Use the cloud copy':'Replace with backup'}</button>
+      ${isSync?`<button class="btn ghost" data-act="restore-cancel" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 2px var(--line),0 3px 0 var(--line)">Keep this device</button>`:''}
     </div>
-    <button class="link" data-act="restore-cancel" style="align-self:flex-start">Cancel</button>
+    ${isSync?'':`<button class="link" data-act="restore-cancel" style="align-self:flex-start">Cancel</button>`}
     </div>`;
 }
 async function bootLocal(){ if(!FSA) return; const h=await idbGet('handle'); if(!h) return; fileHandle=h; fileName=h.name;
   try{ if(await h.queryPermission({mode:'readwrite'})==='granted'){ await adoptHandle(h,false); return; } }catch(e){}
   fileState='reconnect'; if(screen==='home') render(); }
+/* ---------- cloud sync (GitHub Gist) ---------- */
+const SYNCKEY='cjxt-sync', GISTFILE='chengjiao-progress.json';
+let syncCreds=null;
+try{ const s=JSON.parse(localStorage.getItem(SYNCKEY)||'null'); if(s&&typeof s==='object'&&s.token&&s.gistId) syncCreds=s; }catch(e){}
+let syncState={status: syncCreds?'idle':'off', last:0, msg:''};
+let syncDisconnectConfirm=false;
+function saveSyncCreds(c){ syncCreds=c; try{ localStorage.setItem(SYNCKEY, JSON.stringify(c)); }catch(e){} }
+function clearSyncCreds(){ syncCreds=null; try{ localStorage.removeItem(SYNCKEY); }catch(e){} syncState={status:'off',last:0,msg:''}; }
+function ghHeaders(extra){ return Object.assign({'Authorization':'Bearer '+syncCreds.token,'Accept':'application/vnd.github+json'}, extra||{}); }
+async function gistFileContent(g){
+  const f=g&&g.files&&g.files[GISTFILE]; if(!f) return null;
+  if(f.truncated && f.raw_url){ try{ const r=await fetch(f.raw_url); return await r.text(); }catch(e){ return null; } }
+  return f.content;
+}
+async function syncConnect(token){
+  syncState={status:'syncing', last:0, msg:'Connecting…'}; if(screen==='home') render();
+  try{
+    const res=await fetch('https://api.github.com/gists?per_page=100', {headers:{'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json'}});
+    if(res.status===401){ syncState={status:'error', last:0, msg:"That token didn't work. It must be a classic token with the gist scope."}; if(screen==='home') render(); return; }
+    if(!res.ok){ syncState={status:'error', last:0, msg:'GitHub error: '+res.status+' '+res.statusText}; if(screen==='home') render(); return; }
+    const list=await res.json();
+    let gistId=null;
+    for(const g of (Array.isArray(list)?list:[])){ if(g.files && g.files[GISTFILE]){ gistId=g.id; break; } }
+    if(!gistId){
+      const cres=await fetch('https://api.github.com/gists', {method:'POST', headers:{'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','Content-Type':'application/json'}, body: JSON.stringify({description:'成交学堂 progress', public:false, files:{[GISTFILE]:{content: JSON.stringify(P)}}})});
+      if(cres.status===401){ syncState={status:'error', last:0, msg:"That token didn't work. It must be a classic token with the gist scope."}; if(screen==='home') render(); return; }
+      if(!cres.ok){ syncState={status:'error', last:0, msg:'Could not create the gist ('+cres.status+').'}; if(screen==='home') render(); return; }
+      const cd=await cres.json(); gistId=cd.id;
+    }
+    saveSyncCreds({token, gistId});
+    syncState={status:'idle', last:0, msg:''};
+    if(screen==='home') render();
+    await syncPull(true);
+  }catch(e){ syncState={status:'error', last:0, msg:'Connection failed. Check your network and try again.'}; if(screen==='home') render(); }
+}
+let pushTimer=null;
+function queueSyncPush(){
+  if(!syncCreds) return;
+  if(navigator.onLine===false){ syncState=Object.assign({},syncState,{status:'offline'}); return; }
+  clearTimeout(pushTimer); pushTimer=setTimeout(syncPush, 4000);
+}
+async function syncPush(){
+  if(!syncCreds) return;
+  clearTimeout(pushTimer);
+  if(navigator.onLine===false){ syncState=Object.assign({},syncState,{status:'offline'}); if(screen==='home') render(); return; }
+  syncState=Object.assign({},syncState,{status:'syncing'}); if(screen==='home') render();
+  try{
+    const res=await fetch('https://api.github.com/gists/'+syncCreds.gistId, {method:'PATCH', headers:{'Authorization':'Bearer '+syncCreds.token,'Accept':'application/vnd.github+json','Content-Type':'application/json'}, body: JSON.stringify({files:{[GISTFILE]:{content: JSON.stringify(P)}}})});
+    if(!res.ok){ syncState={status:'error', last:syncState.last, msg: res.status===401?'Token no longer works.':'Sync failed ('+res.status+').'}; if(screen==='home') render(); return; }
+    syncState={status:'idle', last:Date.now(), msg:''};
+  }catch(e){ syncState={status:'error', last:syncState.last, msg:'Sync failed — check your connection.'}; }
+  if(screen==='home') render();
+}
+async function syncPull(manual){
+  if(!syncCreds) return;
+  if(navigator.onLine===false){ syncState=Object.assign({},syncState,{status:'offline'}); if(screen==='home') render(); return; }
+  syncState=Object.assign({},syncState,{status:'syncing'}); if(screen==='home') render();
+  try{
+    const res=await fetch('https://api.github.com/gists/'+syncCreds.gistId, {headers:{'Authorization':'Bearer '+syncCreds.token,'Accept':'application/vnd.github+json'}});
+    if(!res.ok){ syncState={status:'error', last:syncState.last, msg: res.status===401?'Token no longer works.':'Sync failed ('+res.status+').'}; if(screen==='home') render(); return; }
+    const g=await res.json();
+    const raw=await gistFileContent(g);
+    let d=null; try{ d=raw?JSON.parse(raw):null; }catch(e){}
+    if(!looksLikeP(d)){ syncState={status:'error', last:syncState.last, msg:'Cloud data looked invalid.'}; if(screen==='home') render(); return; }
+    if((d.updated||0) > (P.updated||0)){
+      pendingImport=d; pendingImportSource='sync';
+      syncState={status:'idle', last:Date.now(), msg:''};
+      if(screen==='home') render();
+    } else {
+      syncState={status:'idle', last:Date.now(), msg:''};
+      if(screen==='home') render();
+      await syncPush();
+    }
+  }catch(e){ syncState={status:'error', last:syncState.last, msg:'Sync failed — check your connection.'}; if(screen==='home') render(); }
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.hidden && syncCreds){ syncPush(); } });
+window.addEventListener('online', ()=>{ if(syncCreds && syncState.status==='offline') syncPush(); });
+function syncRelTime(t){ if(!t) return 'Not yet synced'; const s=Math.round((Date.now()-t)/1000); if(s<10) return 'Synced just now'; if(s<60) return `Synced ${s}s ago`; const m=Math.round(s/60); if(m<60) return `Synced ${m} min ago`; const h=Math.round(m/60); if(h<24) return `Synced ${h}h ago`; return `Synced ${Math.round(h/24)}d ago`; }
+function syncPanel(){
+  if(!syncCreds){
+    const err = syncState.status==='error' ? `<div class="hint" style="color:var(--red-t);margin-top:4px">${esc(syncState.msg)}</div>` : '';
+    const busy = syncState.status==='syncing' ? `<div class="hint" style="margin-top:4px">Connecting…</div>` : '';
+    return `<div class="panel leads" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div style="display:flex;gap:12px;align-items:flex-start"><div class="ico" style="background:var(--mint-2);color:var(--mint-t)">${ICON.bolt}</div><div class="txt"><b>云同步 · Cloud sync</b><div>Keep your progress on GitHub so it survives clearing your browser and follows you between phone and laptop.</div>
+      <div style="margin-top:6px"><a class="link" href="https://github.com/settings/tokens/new?scopes=gist&description=Chengjiao%20Academy%20sync" target="_blank" rel="noopener">Create a token on GitHub</a></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center">
+        <input type="password" id="synctok" placeholder="Paste your classic token" autocomplete="off" spellcheck="false" style="flex:1;min-width:180px;font:inherit;font-size:14px;padding:10px 12px;border-radius:10px;border:2px solid var(--line);background:var(--card);color:var(--ink)">
+        <button class="btn" data-act="sync-connect" style="font-size:15px;padding:9px 18px;border-radius:12px">连接 · Connect</button>
+      </div>
+      ${err}${busy}
+      <div class="hint" style="margin-top:8px;font-weight:400;opacity:.8;line-height:1.45">The token is stored only on this device, can only access gists, and is never included in backup files. The gist is secret — anyone with its link can read it.</div>
+      </div></div></div>`;
+  }
+  let statusLine;
+  if(syncState.status==='offline') statusLine='Offline — will sync when back online';
+  else if(syncState.status==='error') statusLine=`<button class="link" data-act="sync-now" style="padding:0;color:var(--red-t)">Sync failed — tap to retry</button>`;
+  else if(syncState.status==='syncing') statusLine='Syncing…';
+  else statusLine=esc(syncRelTime(syncState.last));
+  const disc = syncDisconnectConfirm
+    ? `<span class="hint">Disconnect and stop syncing?</span><button class="link" data-act="sync-disconnect-yes" style="color:var(--red-t)">Yes, disconnect</button><button class="link" data-act="sync-disconnect-cancel">Cancel</button>`
+    : `<button class="link" data-act="sync-disconnect">断开 · Disconnect</button>`;
+  return `<div class="panel leads" style="flex-direction:column;align-items:stretch;gap:8px">
+    <div style="display:flex;gap:12px;align-items:flex-start"><div class="ico" style="background:var(--mint-2);color:var(--mint-t)">${ICON.bolt}</div><div class="txt"><b>已连接 · Connected</b><div id="syncstatus">${statusLine}</div></div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn" data-act="sync-now" style="font-size:15px;padding:9px 18px;border-radius:12px">立即同步 · Sync now</button>
+      ${disc}
+    </div></div>`;
+}
+
 function backupStale(){
+  if(syncCreds) return false;
   if(!P.backup) return P.oranges>=50;
   if(P.oranges-(P.backup.oranges||0)>=150) return true;
   if(Date.now()-(P.backup.at||0) > 21*24*3600*1000) return true;
@@ -1011,6 +1126,7 @@ function rHome(){
     <div class="panel leads"><div class="ico" style="background:var(--sun-2);color:var(--sun-t)">${ICON.book}</div><div class="txt"><b>词库 · ${seenWords().length}</b><div>Every word you've met, with pinyin, meaning and the sentences it appears in.</div></div>
       <button class="btn" data-act="bank" style="background:var(--sun);box-shadow:0 3px 0 #C9941C;color:#3A2A00">Open</button></div>
     <div class="units">${units}</div>
+    ${syncPanel()}
     ${backupPanel()}
     <div class="foot" id="resetrow"><button class="link" data-act="reset">Reset progress</button></div>
   </section>`;
@@ -1242,6 +1358,11 @@ document.addEventListener('click', ev=>{
     case 'restore-merge': restoreMerge(); break;
     case 'restore-cancel': restoreCancel(); break;
     case 'backup-nudge-dismiss': backupNudgeDismissed=true; rHome(); break;
+    case 'sync-connect': { const inp=$('#synctok'); const tok=inp?inp.value.trim():''; if(inp) inp.value=''; if(tok) syncConnect(tok); break; }
+    case 'sync-now': syncPull(true); break;
+    case 'sync-disconnect': syncDisconnectConfirm=true; rHome(); break;
+    case 'sync-disconnect-cancel': syncDisconnectConfirm=false; rHome(); break;
+    case 'sync-disconnect-yes': clearSyncCreds(); syncDisconnectConfirm=false; rHome(); break;
     case 'bank': X={q:''}; screen='bank'; render(); window.scrollTo(0,0); break;
     case 'garden': screen='garden'; render(); window.scrollTo(0,0); break;
     case 'gbounce': { const el=$('#gscene'); if(el&&!RM){ el.classList.remove('bounce'); void el.offsetWidth; el.classList.add('bounce'); } break; }
@@ -1300,6 +1421,7 @@ function start(data){ if(data&&data.screen){ screen=data.screen; X=data.X; if(sc
 try{ window.claude?.hot?.snapshot?.(()=>({screen, X})); }catch(e){}
 window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
 if(LOCAL) bootLocal();
+if(syncCreds) syncPull(false);
 })();
 </script>
 
