@@ -894,6 +894,40 @@ let wTimer=null;
 function queueWrite(){ if(!fileHandle||fileState!=='linked') return; clearTimeout(wTimer); wTimer=setTimeout(writeFile,500); }
 async function writeFile(){ if(!fileHandle) return; try{ const w=await fileHandle.createWritable(); await w.write(JSON.stringify(P,null,1)); await w.close(); }catch(e){ fileState='reconnect'; if(screen==='home') render(); } }
 function exportFile(){ try{ const b=new Blob([JSON.stringify(P,null,1)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='chengjiao-progress-'+new Date().toLocaleDateString('en-CA')+'.json'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },500); }catch(e){} }
+const LINKCAP=typeof CompressionStream!=='undefined' && typeof DecompressionStream!=='undefined';
+function b64urlEncode(bytes){ let s=''; for(const b of bytes) s+=String.fromCharCode(b); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function b64urlDecode(str){ str=str.replace(/-/g,'+').replace(/_/g,'/'); while(str.length%4) str+='='; const s=atob(str); const b=new Uint8Array(s.length); for(let i=0;i<s.length;i++) b[i]=s.charCodeAt(i); return b; }
+async function gzipJSON(obj){ const bytes=new TextEncoder().encode(JSON.stringify(obj)); const cs=new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip')); return new Uint8Array(await new Response(cs).arrayBuffer()); }
+async function gunzipToJSON(bytes){ const ds=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')); const txt=await new Response(ds).text(); return JSON.parse(txt); }
+async function buildRestoreLink(){ if(!LINKCAP) return null; const gz=await gzipJSON(P); return location.origin+location.pathname+'#p='+b64urlEncode(gz); }
+async function shareLink(){
+  const url=await buildRestoreLink();
+  const base=location.href.split('#')[0];
+  if(!url){ linkMsg='This browser can\'t build a restore link. Use Export/Back up instead.'; render(); return; }
+  const title='成交学堂 · Restore my progress';
+  const text='Tap this link on the other device to restore my 成交学堂 progress (XP '+(P.xp||0)+', 桔子 '+(P.oranges||0)+'):';
+  try{
+    if(navigator.share){ await navigator.share({title,text,url}); }
+    else { await navigator.clipboard.writeText(url); linkMsg='Link copied — paste it into an email, WhatsApp or Telegram to yourself.'; }
+  }catch(e){ if(e&&e.name==='AbortError') return;
+    try{ await navigator.clipboard.writeText(url); linkMsg='Sharing wasn\'t available, so the link was copied instead.'; }
+    catch(e2){ linkMsg='Could not share or copy the link.'; } }
+  render();
+}
+let linkMsg='';
+async function checkRestoreLink(){
+  if(!LINKCAP) return;
+  const h=location.hash;
+  if(!h.startsWith('#p=')) return;
+  const enc=h.slice(3);
+  history.replaceState(null,'',location.pathname+location.search);
+  try{
+    const d=await gunzipToJSON(b64urlDecode(enc));
+    if(!looksLikeP(d)) throw 0;
+    pendingImport=d; pendingImportSource='link';
+    if(screen==='home') render();
+  }catch(e){ /* not a valid restore link — ignore quietly */ }
+}
 async function shareBackup(){
   const name='chengjiao-progress-'+new Date().toLocaleDateString('en-CA')+'.json';
   const f=new File([JSON.stringify(P,null,1)],name,{type:'application/json'});
@@ -929,11 +963,11 @@ function fmtBackupDate(t){ return new Date(t).toLocaleDateString('en-GB',{day:'n
 function importComparePanel(){
   if(!pendingImport) return '';
   const inc=pendingImport, curDoneN=Object.keys(P.done||{}).length, incDoneN=Object.keys(inc.done||{}).length;
-  const isSync = pendingImportSource==='sync';
+  const isSync = pendingImportSource==='sync', isLink = pendingImportSource==='link';
   const row=(lbl,a,b)=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)"><span class="hint" style="font-weight:700">${esc(lbl)}</span><span style="display:flex;gap:18px"><b>${esc(a)}</b><b>${esc(b)}</b></span></div>`;
-  const title = isSync ? '云同步 · Cloud has newer progress' : '还原进度 · Restore from backup';
-  const desc = isSync ? "Your cloud copy is newer than what's on this device. Choose how to combine them." : "Compare the backup file with what's on this device, then choose how to combine them.";
-  const rightLbl = isSync ? 'Cloud' : 'Backup file';
+  const title = isSync ? '云同步 · Cloud has newer progress' : isLink ? '恢复链接 · Restore link' : '还原进度 · Restore from backup';
+  const desc = isSync ? "Your cloud copy is newer than what's on this device. Choose how to combine them." : isLink ? "This link carries progress from another device. Choose how to combine it with what's on this device." : "Compare the backup file with what's on this device, then choose how to combine them.";
+  const rightLbl = isSync ? 'Cloud' : isLink ? 'From link' : 'Backup file';
   return `<div class="panel leads" style="flex-direction:column;align-items:stretch;gap:10px">
     <div class="txt"><b>${title}</b><div>${esc(desc)}</div></div>
     <div>
@@ -945,7 +979,7 @@ function importComparePanel(){
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
       <button class="btn" data-act="restore-merge" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--coral);box-shadow:0 4px 0 var(--coral-d)">Merge · keep the best of both</button>
-      <button class="btn ghost" data-act="restore-replace" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 2px var(--line),0 3px 0 var(--line)">${isSync?'Use the cloud copy':'Replace with backup'}</button>
+      <button class="btn ghost" data-act="restore-replace" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 2px var(--line),0 3px 0 var(--line)">${isSync?'Use the cloud copy':isLink?'Use the link':'Replace with backup'}</button>
       ${isSync?`<button class="btn ghost" data-act="restore-cancel" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 2px var(--line),0 3px 0 var(--line)">Keep this device</button>`:''}
     </div>
     ${isSync?'':`<button class="link" data-act="restore-cancel" style="align-self:flex-start">Cancel</button>`}
@@ -1073,7 +1107,7 @@ function backupStale(){
 function backupPanel(){
   if(pendingImport) return importComparePanel();
   let status, btns='';
-  if(!FSA) status='Progress is saved in this browser on this device. Clearing Safari’s website data (or uninstalling the app) erases it, so back up now and then.';
+  if(!FSA) status='Progress is saved in this browser on this device. Clearing Safari’s website data (or uninstalling the app) erases it, so back up now and then — when sharing, choose “Save to Files → On My iPhone” for a copy that survives that.';
   else if(fileState==='linked') status=`Saving automatically to <b>${esc(fileName)}</b>.`;
   else if(fileState==='reconnect'){ status=`Linked to <b>${esc(fileName)}</b>. Your browser needs you to allow access again for this session.`; btns=`<button class="btn" data-act="lp-reconnect" style="font-size:15px;padding:9px 18px;border-radius:12px">Reconnect</button>`; }
   else { status='Progress is saved in this browser. Link a file to also keep it in a folder you choose, such as the app folder in Documents.'; btns=`<button class="btn" data-act="lp-create" style="font-size:15px;padding:9px 18px;border-radius:12px">Create file</button><button class="btn ghost" data-act="lp-open" style="font-size:15px;padding:9px 18px;border-radius:12px">Open existing</button>`; }
@@ -1084,13 +1118,16 @@ function backupPanel(){
       <button class="link" data-act="backup-nudge-dismiss" aria-label="Dismiss" style="color:inherit">✕</button></div>` : '';
   const shareBtn = `<button class="btn" data-act="do-backup" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--coral);box-shadow:0 4px 0 var(--coral-d)${nudge?',0 0 0 3px var(--sun)':''}">备份 · Back up</button>`;
   const restoreBtn = `<button class="btn ghost" data-act="lp-import" style="font-size:15px;padding:9px 18px;border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 2px var(--line),0 3px 0 var(--line)">恢复 · Restore</button>`;
+  const linkBtn = LINKCAP ? `<button class="link" data-act="do-link" style="margin-top:4px">发送恢复链接 · Send myself a restore link (email / WhatsApp)</button>` : '';
   const msg = restoreMsg ? `<div class="hint" style="color:var(--mint-t);margin-top:2px">${esc(restoreMsg)}</div>` : '';
-  restoreMsg='';
+  const lmsg = linkMsg ? `<div class="hint" style="margin-top:2px">${esc(linkMsg)}</div>` : '';
+  restoreMsg=''; linkMsg='';
   return `<div class="panel leads" style="flex-direction:column;align-items:stretch;gap:8px">
     ${nudge}
     <div style="display:flex;gap:12px;align-items:flex-start"><div class="ico" style="background:var(--mint-2);color:var(--mint-t)">${ICON.disk}</div><div class="txt"><b>备份 · Backup</b><div id="lpstatus">${status}</div>
-      <div class="hint" style="margin-top:2px">${lastLine}</div>${persistLine}${msg}
+      <div class="hint" style="margin-top:2px">${lastLine}</div>${persistLine}${msg}${lmsg}
       ${FSA?`<div style="margin-top:4px"><button class="link" data-act="lp-export">Export backup</button><button class="link" data-act="lp-import">Import</button></div>`:''}
+      <div>${linkBtn}</div>
       <input type="file" id="lpimp" accept=".json,application/json" hidden></div></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">${shareBtn}${restoreBtn}${btns}</div></div>`;
 }
@@ -1354,6 +1391,7 @@ document.addEventListener('click', ev=>{
     case 'lp-export': exportFile(); break;
     case 'lp-import': { const inp=$('#lpimp'); if(inp){ inp.onchange=()=>{ if(inp.files[0]) importFile(inp.files[0]); }; inp.click(); } break; }
     case 'do-backup': shareBackup(); break;
+    case 'do-link': shareLink(); break;
     case 'restore-replace': restoreReplace(); break;
     case 'restore-merge': restoreMerge(); break;
     case 'restore-cancel': restoreCancel(); break;
@@ -1421,7 +1459,7 @@ function start(data){ if(data&&data.screen){ screen=data.screen; X=data.X; if(sc
 try{ window.claude?.hot?.snapshot?.(()=>({screen, X})); }catch(e){}
 window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
 if(LOCAL) bootLocal();
-if(syncCreds) syncPull(false);
+checkRestoreLink().then(()=>{ if(syncCreds && !pendingImport) syncPull(false); });
 })();
 </script>
 
